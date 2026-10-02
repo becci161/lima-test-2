@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DB Abfahrtstafel – Nächste Stunde</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --muted:#94a3b8; --acc:#e11d48; --ok:#16a34a; --warn:#f59e0b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:#f1f5f9; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:#020617; border-bottom:1px solid #1e293b; position:sticky; top:0; z-index:10; }
+  header h1 { font-size:18px; margin:0; }
+  header h1 span { color:var(--acc); }
+  button { cursor:pointer; border:0; border-radius:8px; padding:9px 14px; font-size:14px; }
+  .btn { background:var(--acc); color:#fff; }
+  .btn-sec { background:#334155; color:#fff; }
+  main { max-width:1000px; margin:0 auto; padding:18px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; margin-bottom:14px; }
+  label { font-size:13px; color:var(--muted); display:block; margin-bottom:6px; }
+  input[type=text], input[type=password] { width:100%; padding:11px 12px; border-radius:8px; border:1px solid #334155; background:#0f172a; color:#fff; font-size:15px; }
+  .search-wrap { position:relative; }
+  .results { position:absolute; top:100%; left:0; right:0; background:#020617; border:1px solid #334155; border-radius:0 0 10px 10px; max-height:300px; overflow:auto; z-index:20; }
+  .results div { padding:10px 12px; border-bottom:1px solid #1e293b; cursor:pointer; }
+  .results div:hover { background:#1e293b; }
+  .results small { color:var(--muted); }
+  .meta { display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; }
+  .meta strong { font-size:18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid #334155; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+  .delay { font-weight:700; }
+  .delay.on { color:var(--ok); }
+  .delay.late { color:var(--warn); }
+  .cancelled { color:var(--acc); font-weight:700; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:20px; background:#334155; font-size:12px; margin-right:4px; }
+  dialog { background:var(--card); color:#fff; border:1px solid #334155; border-radius:12px; padding:20px; width:min(480px,92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  .row { display:flex; gap:10px; margin-top:12px; justify-content:flex-end; }
+  .hint { color:var(--muted); font-size:13px; }
+  .status-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .dot-ok { background:var(--ok); } .dot-miss { background:var(--acc); }
+  @media(max-width:640px){ table{font-size:13px} th:nth-child(5),td:nth-child(5){display:none} }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>DB</span> Abfahrtstafel · nächste 60 Min</h1>
+  <div>
+    <span id="keyStatus" class="hint"></span>
+    <button class="btn-sec" id="openSettings">⚙ Settings</button>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <label for="q">Bahnhof suchen (Name oder EVA-Nummer, z.B. Frankfurt, 8000105, BLS, F*)</label>
+    <div class="search-wrap">
+      <input type="text" id="q" placeholder="Tippen zum Suchen…" autocomplete="off">
+      <div class="results" id="results" hidden></div>
+    </div>
+    <p class="hint">Quelle: DB Timetables API · <code>/station/{pattern}</code> + <code>/plan/{eva}/{date}/{hour}</code> + <code>/fchg/{eva}</code>. Zeiten Europe/Berlin.<br>
+    Tipp laut Doku: Umlaute gehen nicht – nutze z.B. <code>Muenster</code>, <code>Mu*</code> oder direkt EVA <code>8000263</code> (Münster Hbf).
+    <button class="btn-sec" id="testConn" style="margin-left:8px">Verbindung testen</button>
+    <span id="testOut" class="hint"></span></p>
+    <p class="hint">Direktwahl: <a href="#" data-eva="8000263" data-name="Münster Hbf" class="quick">Münster Hbf 8000263</a> · <a href="#" data-eva="8000105" data-name="Frankfurt(Main)Hbf" class="quick">Frankfurt 8000105</a></p>
+  </div>
+
+  <div class="card meta">
+    <div>
+      <strong id="stName">Kein Bahnhof gewählt</strong><br>
+      <span class="hint" id="stMeta"></span>
+    </div>
+    <div>
+      <button class="btn-sec" id="reload">↻ Aktualisieren</button>
+      <span class="hint" id="updated"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>Plan</th><th>Aktuell</th><th>Zug</th><th>Richtung</th><th>Gleis</th><th>Status</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="hint">Bitte Bahnhof wählen.</td></tr></tbody>
+    </table>
+    <p class="hint" id="count"></p>
+  </div>
+</main>
+
+<dialog id="dlg">
+  <h3 style="margin-top:0">API Zugang</h3>
+  <p class="hint">Wird nur in <code>localStorage</code> dieses Browsers gespeichert (lokales Projekt).</p>
+  <label>DB-Client-ID (DB-Client-ID Header)</label>
+  <input type="text" id="clientId" placeholder="Client-ID">
+  <br><br>
+  <label>DB-Api-Key (DB-Api-Key Header)</label>
+  <input type="password" id="clientSecret" placeholder="Api-Key">
+  <div class="row">
+    <button class="btn-sec" id="closeDlg">Schließen</button>
+    <button class="btn-sec" id="clearKeys">Löschen</button>
+    <button class="btn" id="saveKeys">Speichern</button>
+  </div>
+</dialog>
+
+<script>
+const BASE = "https://apis.deutschebahn.com/db-api-marketplace/apis/timetables/v1";
+const $ = id => document.getElementById(id);
+const q = $("q"), results = $("results"), rows = $("rows");
+
+function getKeys(){ return { id: localStorage.getItem("dbTimetableClientId")||"", secret: localStorage.getItem("dbTimetableClientSecret")||"" }; }
+function updateKeyStatus(){
+  const k = getKeys();
+  $("keyStatus").innerHTML = (k.id && k.secret) ? '<span class="status-dot dot-ok"></span>Keys gesetzt' : '<span class="status-dot dot-miss"></span>keine Keys';
+  $("clientId").value = k.id; $("clientSecret").value = k.secret;
+}
+async function api(path){
+  const k = getKeys();
+  if(!k.id || !k.secret) throw new Error("Bitte zuerst in Settings Client-ID und Api-Key eintragen.");
+  const url = BASE + path;
+  const r = await fetch(url, { headers: { "DB-Client-ID": k.id, "DB-Api-Key": k.secret, "Accept": "application/xml" } });
+  if(!r.ok){
+    const body = (await r.text().catch(()=> "")).slice(0, 500);
+    let hint = "";
+    if(r.status === 403) hint = " → 403 = Keys falsch/vertauscht oder API-Produkt 'Timetables' im DB Developer Portal nicht abonniert / Subscription inaktiv. Auch auf Leerzeichen beim Kopieren prüfen.";
+    if(r.status === 401) hint = " → 401 = Auth fehlt/ungültig.";
+    throw new Error(`API Fehler ${r.status} für ${path}.${hint} Antwort: ${body||"(leer)"} | URL: ${url}`);
+  }
+  return await r.text();
+}
+function parseXml(t){ return new DOMParser().parseFromString(t, "application/xml"); }
+
+// --- Station search ---
+let debounce;
+q.addEventListener("input", ()=>{
+  clearTimeout(debounce);
+  const v = q.value.trim();
+  if(v.length < 2){ results.hidden = true; return; }
+  debounce = setTimeout(()=>searchStation(v), 350);
+});
+async function searchStation(pattern){
+  try{
+    results.hidden = false;
+    results.innerHTML = "<div>Lade…</div>";
+    const xml = parseXml(await api("/station/" + encodeURIComponent(pattern)));
+    const nodes = [...xml.getElementsByTagName("station")];
+    if(!nodes.length){ results.innerHTML = "<div>Keine Treffer</div>"; return; }
+    results.innerHTML = "";
+    nodes.slice(0,50).forEach(n=>{
+      const name = n.getAttribute("name"), eva = n.getAttribute("eva"), ds100 = n.getAttribute("ds100");
+      const d = document.createElement("div");
+      d.innerHTML = `<b></b> <small></small>`;
+      d.querySelector("b").textContent = name;
+      d.querySelector("small").textContent = `EVA ${eva}${ds100?" · "+ds100:""}`;
+      d.onclick = ()=>{ selectStation(name, eva); results.hidden = true; };
+      results.appendChild(d);
+    });
+  }catch(e){ results.innerHTML = `<div>${e.message}</div>`; }
+}
+function selectStation(name, eva){
+  localStorage.setItem("dbStationName", name);
+  localStorage.setItem("dbStationEva", eva);
+  q.value = name;
+  loadDepartures();
+}
+
+// --- Time helpers (Europe/Berlin) ---
+function berlinParts(d=new Date()){
+  const fmt = new Intl.DateTimeFormat("de-DE",{timeZone:"Europe/Berlin",year:"2-digit",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
+  const p = Object.fromEntries(fmt.formatToParts(d).map(x=>[x.type,x.value]));
+  return { yy:p.year, MM:p.month, dd:p.day, HH:p.hour==="24"?"00":p.hour, mm:p.minute };
+}
+function yymmdd(d){ const b=berlinParts(d); return `${b.yy}${b.MM}${b.dd}`; }
+function hh(d){ return berlinParts(d).HH; }
+function parseTs(ts){ // YYMMddHHmm
+  if(!ts||ts.length!==10) return null;
+  const d = new Date(2000+ +ts.slice(0,2), +ts.slice(2,4)-1, +ts.slice(4,6), +ts.slice(6,8), +ts.slice(8,10));
+  return d;
+}
+function fmtHM(d){ return d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}); }
+
+// --- Load departures ---
+$("reload").onclick = loadDepartures;
+async function loadDepartures(){
+  const eva = localStorage.getItem("dbStationEva");
+  const name = localStorage.getItem("dbStationName")||"";
+  if(!eva){ rows.innerHTML = '<tr><td colspan="6" class="hint">Bitte zuerst Bahnhof suchen & wählen.</td></tr>'; return; }
+  $("stName").textContent = name + " (" + eva + ")";
+  rows.innerHTML = '<tr><td colspan="6">Lade Plan + Änderungen…</td></tr>';
+  try{
+    const now = new Date();
+    const in60 = new Date(now.getTime() + 60*60000);
+    const slices = [...new Set([now, in60].map(d=>yymmdd(d)+"/"+hh(d)))];
+    // plan slices + full changes in parallel
+    const [planXmls, fchgXml] = await Promise.all([
+      Promise.all(slices.map(s=>api(`/plan/${eva}/${s}`).then(parseXml))),
+      api(`/fchg/${eva}`).then(parseXml).catch(()=>null)
+    ]);
+    const changes = {};
+    if(fchgXml) [...fchgXml.getElementsByTagName("s")].forEach(s=>{ changes[s.getAttribute("id")] = s; });
+
+    let stops = [];
+    planXmls.forEach(x=>stops.push(...[...x.getElementsByTagName("s")]));
+    // fchg-only trips (added) ergänzen
+    if(fchgXml) [...fchgXml.getElementsByTagName("s")].forEach(s=>{
+      if(!stops.find(p=>p.getAttribute("id")===s.getAttribute("id"))) stops.push(s);
+    });
+
+    let deps = [];
+    stops.forEach(s=>{
+      const id = s.getAttribute("id");
+      const ch = changes[id];
+      // nutze change-node falls vorhanden, sonst plan-node
+      const src = ch || s;
+      const dp = src.getElementsByTagName("dp")[0];
+      if(!dp) return;
+      const tl = src.getElementsByTagName("tl")[0] || s.getElementsByTagName("tl")[0];
+      const pt = parseTs(dp.getAttribute("pt") || s.getElementsByTagName("dp")[0]?.getAttribute("pt"));
+      const ct = parseTs(dp.getAttribute("ct"));
+      const eff = ct || pt;
+      if(!eff) return;
+      if(eff < new Date(now.getTime()-2*60000) || eff > in60) return; // Fenster: jetzt-2min bis +60min
+      const cs = dp.getAttribute("cs"); // c = cancelled?
+      const cat = tl?.getAttribute("c")||"", num = tl?.getAttribute("n")||"";
+      const ppth = dp.getAttribute("ppth")||"", cpth = dp.getAttribute("cpth")||"";
+      const dest = (cpth||ppth).split("|").filter(Boolean).pop() || "—";
+      const delay = (pt&&ct) ? Math.round((ct-pt)/60000) : 0;
+      deps.push({ pt, ct, eff, cs, cat, num, dest, pp:dp.getAttribute("pp")||"", cp:dp.getAttribute("cp")||"", path:cpth||ppth });
+    });
+    deps.sort((a,b)=>a.eff-b.eff);
+    $("stMeta").textContent = `EVA ${eva} · Fenster ${fmtHM(now)}–${fmtHM(in60)} Uhr · ${slices.join(" + ")}`;
+    $("updated").textContent = "Stand " + new Date().toLocaleTimeString("de-DE");
+    $("count").textContent = deps.length + " Abfahrten in den nächsten 60 Minuten.";
+    if(!deps.length){ rows.innerHTML = '<tr><td colspan="6" class="hint">Keine Abfahrten im Fenster.</td></tr>'; return; }
+    rows.innerHTML = "";
+    deps.forEach(d=>{
+      const tr = document.createElement("tr");
+      const cls = d.cs==="c" ? "cancelled" : (d.ct ? (d.ct>d.pt?"late":"on") : "on");
+      const status = d.cs==="c" ? "❌ Ausfall" : (d.ct ? (d.ct>d.pt ? `+${Math.round((d.ct-d.pt)/60000)} min` : "pünktlich") : "planmäßig");
+      tr.innerHTML = `<td>${d.pt?fmtHM(d.pt):"—"}</td><td class="delay ${cls}">${d.ct?fmtHM(d.ct):fmtHM(d.pt)}${d.cs==="c"?" (Ausfall)":""}</td>
+        <td><span class="badge">${d.cat} ${d.num}</span></td><td></td><td>${d.cp||d.pp||"—"}${d.cp&&d.pp&&d.cp!==d.pp?" (war "+d.pp+")":""}</td><td>${status}</td>`;
+      tr.children[3].textContent = d.dest;
+      rows.appendChild(tr);
+    });
+  }catch(e){
+    rows.innerHTML = `<tr><td colspan="6">Fehler: ${e.message}</td></tr>`;
+  }
+}
+
+// --- Settings dialog ---
+const dlg = $("dlg");
+$("openSettings").onclick = ()=>{ updateKeyStatus(); dlg.showModal(); };
+$("closeDlg").onclick = ()=>dlg.close();
+$("saveKeys").onclick = ()=>{
+  localStorage.setItem("dbTimetableClientId", $("clientId").value.trim());
+  localStorage.setItem("dbTimetableClientSecret", $("clientSecret").value.trim());
+  updateKeyStatus(); dlg.close();
+};
+$("clearKeys").onclick = ()=>{ localStorage.removeItem("dbTimetableClientId"); localStorage.removeItem("dbTimetableClientSecret"); updateKeyStatus(); };
+
+// init
+updateKeyStatus();
+document.querySelectorAll(".quick").forEach(a=>a.onclick = e=>{ e.preventDefault(); selectStation(a.dataset.name, a.dataset.eva); results.hidden = true; });
+$("testConn").onclick = async ()=>{
+  $("testOut").textContent = "teste…";
+  try{
+    // EVA statt Umlaut-Name nehmen, um Such-Problem auszuschließen
+    const t = await api("/station/8000263");
+    const n = parseXml(t).getElementsByTagName("station").length;
+    $("testOut").textContent = `OK: /station/8000263 liefert ${n} Treffer. Keys + Subscription gültig.`;
+  }catch(e){ $("testOut").textContent = e.message; }
+};
+const se = localStorage.getItem("dbStationEva"), sn = localStorage.getItem("dbStationName");
+if(se){ q.value = sn||se; loadDepartures(); }
+setInterval(()=>{ if(localStorage.getItem("dbStationEva")) loadDepartures(); }, 60000);
+</script>
+</body>
+</html>
